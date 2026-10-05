@@ -6,7 +6,7 @@ This repository publishes https://getfugo.github.io/, the documentation of
 
 1. builds `docs/` of getfugo/fugo at the latest release, with that release's binary;
 2. adds the benchmark history that fugo's CI keeps on its `gh-pages` branch, for the
-   [Benchmarks](https://getfugo.github.io/about/benchmarks/) page;
+   [Benchmarks](https://getfugo.github.io/benchmarks/) page;
 3. deploys the site with GitHub Pages (Settings → Pages → Source: GitHub Actions).
 
 To change the documentation, edit `docs/` in getfugo/fugo. `DEVELOPMENT.md` there, under
