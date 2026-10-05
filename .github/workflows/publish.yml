@@ -1,0 +1,98 @@
+# Publishes https://getfugo.github.io/: fugo's documentation, docs/ of getfugo/fugo, at the latest
+# release, built with that release's binary (tools/docs/build.sh), with the benchmark history that
+# getfugo/fugo's CI keeps on its gh-pages branch (dev/bench/data.js) as benchmarks/data.json for
+# the Benchmarks page. Runs daily, so a new release or new benchmark results show the next day;
+# run it by hand (Actions → Publish → Run workflow) to publish at once, optionally from another
+# ref of getfugo/fugo (the binary is still the latest release's).
+name: Publish
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "The getfugo/fugo ref to build docs/ from (default: the latest release tag)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer run waits instead of cancelling a deployment in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo getfugo/fugo --json tagName -q .tagName)
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "latest release: $tag"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: getfugo/fugo
+          ref: ${{ inputs.ref || steps.release.outputs.tag }}
+          path: fugo
+
+      - name: fugo ${{ steps.release.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          v=${TAG#v}
+          gh release download "$TAG" --repo getfugo/fugo --dir bin \
+            --pattern "fugo_${v}_linux-amd64.tar.gz" --pattern "fugo_${v}_checksums.txt"
+          cd bin
+          grep "_linux-amd64.tar.gz\$" "fugo_${v}_checksums.txt" | sha256sum -c -
+          tar -xzf "fugo_${v}_linux-amd64.tar.gz" fugo
+          ./fugo version
+
+      # github-action-benchmark's data.js is a script (`window.BENCHMARK_DATA = {…}`); the page
+      # reads JSON, and only the commit, the date and each benchmark's name, value and unit.
+      - name: Benchmark results
+        run: |
+          mkdir -p fugo/docs/static/benchmarks
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/getfugo/fugo/gh-pages/dev/bench/data.js |
+            sed '1s/^window.BENCHMARK_DATA = //' |
+            jq -c '{lastUpdate, entries: (.entries | map_values(map({commit: {id: .commit.id}, date,
+              benches: [.benches[] | {name, value, unit: (.unit | split("\t")[0])}]})))}' \
+            >fugo/docs/static/benchmarks/data.json
+          jq -r '.entries | to_entries[] | "\(.key): \(.value | length) commits"' fugo/docs/static/benchmarks/data.json
+
+      - name: Build
+        env:
+          FUGO_BINARY: ${{ github.workspace }}/bin/fugo
+          FUGO_DOCS_WORK: ${{ runner.temp }}/docs
+        run: fugo/tools/docs/build.sh -o "$RUNNER_TEMP/public" -- --minify
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/public
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
